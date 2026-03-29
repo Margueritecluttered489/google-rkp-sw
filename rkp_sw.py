@@ -489,13 +489,57 @@ def submit_csr(
 # Keybox XML Export
 # ---------------------------------------------------------------------------
 
-def _pem_string(obj, encoding=Encoding.PEM, fmt=None) -> str:
-    """Serialize a key or certificate to PEM text."""
-    if isinstance(obj, x509.Certificate):
-        return obj.public_bytes(Encoding.PEM).decode()
-    if fmt is not None:
-        return obj.private_bytes(Encoding.PEM, fmt, NoEncryption()).decode()
-    return obj.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo).decode()
+def _sort_cert_chain(certs: list[x509.Certificate]) -> list[x509.Certificate]:
+    """Sort certificates into leaf-first, root-last order.
+
+    The leaf is the certificate whose subject is not the issuer of any
+    other certificate in the set. The root is self-signed.
+    """
+    if len(certs) <= 1:
+        return list(certs)
+
+    by_subject = {cert.subject: cert for cert in certs}
+
+    # Subjects that appear as an issuer of at least one other cert.
+    subjects_that_issue = set()
+    for cert in certs:
+        if cert.issuer != cert.subject:
+            subjects_that_issue.add(cert.issuer)
+
+    # Leaf: subject never appears as another cert's issuer.
+    leaf = None
+    for cert in certs:
+        if cert.subject not in subjects_that_issue:
+            leaf = cert
+            break
+
+    if leaf is None:
+        return list(certs)
+
+    # Walk from leaf to root via issuer links.
+    ordered = [leaf]
+    seen = {leaf.subject}
+    current = leaf
+    while len(ordered) < len(certs):
+        if current.issuer in by_subject and current.issuer not in seen:
+            current = by_subject[current.issuer]
+            ordered.append(current)
+            seen.add(current.subject)
+        else:
+            break
+
+    # Append any unchained certs at the end.
+    for cert in certs:
+        if cert.subject not in seen:
+            ordered.append(cert)
+
+    return ordered
+
+
+def _indent_pem(pem: str, indent: str) -> str:
+    """Indent every line of a PEM block."""
+    return '\n'.join(indent + line if line.strip() else ''
+                     for line in pem.strip().splitlines())
 
 
 def build_keybox_xml(
@@ -508,40 +552,53 @@ def build_keybox_xml(
 
     Args:
         ec_privkey: EC private key (P-256).
-        ec_cert_chain: List of X.509 certificates (leaf first, root last).
+        ec_cert_chain: Unordered list of X.509 certificates.
         device_id: Device identifier string.
 
     Returns:
-        Pretty-printed XML string.
+        Pretty-printed XML string with certificates in leaf-first order.
     """
-    root = ET.Element('AndroidAttestation')
+    ec_cert_chain = _sort_cert_chain(ec_cert_chain)
 
-    ET.SubElement(root, 'NumberOfKeyboxes').text = '1'
+    indent1 = '    '     # Keybox level
+    indent2 = '        ' # Key level
+    indent3 = '            ' # CertificateChain level
 
-    keybox = ET.SubElement(root, 'Keybox', DeviceID=device_id)
+    lines = [
+        '<?xml version="1.0"?>',
+        '<AndroidAttestation>',
+        f'{indent1}<NumberOfKeyboxes>1</NumberOfKeyboxes>',
+        f'{indent1}<Keybox DeviceID="{device_id}">',
+        f'{indent2}<Key algorithm="ecdsa">',
+        f'{indent2}    <PrivateKey format="pem">',
+    ]
 
-    ec_key_elem = ET.SubElement(keybox, 'Key', algorithm='ecdsa')
-    pk_elem = ET.SubElement(ec_key_elem, 'PrivateKey', format='pem')
-    pk_elem.text = '\n' + _pem_string(
-        ec_privkey, fmt=PrivateFormat.TraditionalOpenSSL
+    key_pem = ec_privkey.private_bytes(
+        Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption()
+    ).decode().strip()
+    lines.append(_indent_pem(key_pem, indent2 + '    '))
+    lines.append(f'{indent2}    </PrivateKey>')
+
+    lines.append(f'{indent2}    <CertificateChain>')
+    lines.append(
+        f'{indent3}    <NumberOfCertificates>'
+        f'{len(ec_cert_chain)}'
+        f'</NumberOfCertificates>'
     )
 
-    chain_elem = ET.SubElement(ec_key_elem, 'CertificateChain')
-    ET.SubElement(chain_elem, 'NumberOfCertificates').text = str(
-        len(ec_cert_chain)
-    )
     for cert in ec_cert_chain:
-        cert_elem = ET.SubElement(chain_elem, 'Certificate', format='pem')
-        cert_elem.text = '\n' + _pem_string(cert)
+        cert_pem = cert.public_bytes(Encoding.PEM).decode().strip()
+        lines.append(f'{indent3}    <Certificate format="pem">')
+        lines.append(_indent_pem(cert_pem, indent3 + '    '))
+        lines.append(f'{indent3}    </Certificate>')
 
-    rough = ET.tostring(root, encoding='unicode', xml_declaration=False)
-    dom = minidom.parseString(rough)
-    pretty = dom.toprettyxml(indent='    ')
-    # Remove minidom's default xml declaration (we add our own)
-    lines = pretty.split('\n')
-    if lines[0].startswith('<?xml'):
-        lines = lines[1:]
-    return '<?xml version="1.0"?>\n' + '\n'.join(lines)
+    lines.append(f'{indent2}    </CertificateChain>')
+    lines.append(f'{indent2}</Key>')
+    lines.append(f'{indent1}</Keybox>')
+    lines.append('</AndroidAttestation>')
+    lines.append('')
+
+    return '\n'.join(lines)
 
 
 def parse_der_cert_chain(data: bytes) -> list[x509.Certificate]:
