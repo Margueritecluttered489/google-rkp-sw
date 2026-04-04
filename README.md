@@ -12,7 +12,7 @@ Trusted Execution Environment (TEE) to derive cryptographic keys and sign
 provisioning requests.
 
 This tool replicates that flow entirely in software, given a device's
-CDI_Leaf seed (Ed25519 private key material) or a hardware-derived AES key.
+32-byte CDI_Leaf seed.
 
 [rkp-spec]: https://source.android.com/docs/core/ota/modular-system/remote-key-provisioning
 
@@ -28,8 +28,8 @@ CDI_Leaf seed (Ed25519 private key material) or a hardware-derived AES key.
 +-----------------------------+-----------------------------+
 |                        rkp_sw.py                          |
 |                                                           |
-|  CDI_Leaf Seed ─── Ed25519 Key ─── DICE Chain            |
-|       |                                 |                 |
+|  CDI_Leaf Seed ─── Signing Key ─── DICE Chain             |
+|       |          (Ed25519 or P-256)     |                 |
 |       |           ECDH-ES + HKDF ─── AES-256-GCM         |
 |       |                |                                  |
 |       v                v                                  |
@@ -40,23 +40,6 @@ CDI_Leaf seed (Ed25519 private key material) or a hardware-derived AES key.
 |     AuthenticatedRequest (CBOR)                           |
 +-----------------------------------------------------------+
 ```
-
-### Key Derivation
-
-The CDI_Leaf seed can be provided directly (`--seed`) or derived from a
-hardware AES key (`--hw-key`) using an AES-128-CMAC counter-mode KDF per
-[NIST SP 800-108][nist-kdf]:
-
-```
-block_i = AES-CMAC(hw_key, BE32(i) || label)
-output  = block_1 || block_2 || ...  (truncated to requested length)
-```
-
-On real devices, the AES key resides in a SoC-internal key ladder and is
-not software-accessible. The `--hw-key` flag accepts the derived key for
-simulation and research purposes.
-
-[nist-kdf]: https://csrc.nist.gov/pubs/sp/800/108/r1/upd1/final
 
 ## Requirements
 
@@ -87,7 +70,7 @@ See `template.conf` for all supported fields. Private config files
 
 ```
 python3 rkp_sw.py info --seed <64-hex> --config device_prop.conf
-python3 rkp_sw.py info --hw-key <32-hex> --kdf-label rkp_bcc_km --config device_prop.conf
+python3 rkp_sw.py info --seed <64-hex> --curve p256 --config device_prop.conf
 ```
 
 ### Provision attestation keys
@@ -96,8 +79,11 @@ Generate EC P-256 keypairs, build a CSR, and submit to Google's RKP server:
 
 ```
 python3 rkp_sw.py provision --seed <64-hex> --config device_prop.conf
-python3 rkp_sw.py provision --hw-key <32-hex> --kdf-label rkp_bcc_km --config device_prop.conf -n 2
+python3 rkp_sw.py provision --seed <64-hex> --curve p256 --config device_prop.conf -n 2
 ```
+
+The `--curve` flag selects the DICE chain signing key type: `ed25519`
+(default) or `p256`.
 
 ### Export keybox.xml
 
@@ -123,7 +109,7 @@ The tool implements the full `generateCertificateRequestV2` protocol:
    - `DeviceInfo` (CBOR map from config)
    - `DiceCertChain` (Degenerate DICE: UDS = CDI_Leaf, self-signed)
    - `ProtectedData` (COSE_Encrypt0 with ECDH-ES + AES-256-GCM)
-   - `SignedData` (COSE_Sign1 with Ed25519 over challenge + payload)
+   - `SignedData` (COSE_Sign1 over challenge + payload)
 3. **CSR submit** &mdash; `POST :signCertificates` returns X.509 certificate
    chains signed by Google's attestation root.
 
@@ -132,9 +118,8 @@ The tool implements the full `generateCertificateRequestV2` protocol:
 | Specification | Use |
 |---|---|
 | [RFC 9052][rfc9052] | COSE_Sign1, COSE_Encrypt0 structures |
-| [RFC 9053][rfc9053] | EdDSA, ECDH-ES, AES-256-GCM algorithm identifiers |
+| [RFC 9053][rfc9053] | EdDSA, ES256, ECDH-ES, AES-256-GCM algorithm identifiers |
 | [RFC 8392][rfc8392] | CWT claims (issuer, subject) |
-| [NIST SP 800-108r1][nist-kdf] | AES-CMAC counter-mode KDF |
 | [Open DICE][dice] | DICE certificate chain profile |
 | [Android RKP AIDL][rkp-aidl] | AuthenticatedRequest CDDL schema |
 
