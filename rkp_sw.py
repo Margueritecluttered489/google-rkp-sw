@@ -886,7 +886,8 @@ def _add_key_args(parser: argparse.ArgumentParser) -> None:
         help='32-byte CDI_Leaf seed (64 hex chars).',
     )
     parser.add_argument(
-        '--curve', type=str, choices=['ed25519', 'p256'], default='ed25519',
+        '--curve', type=str.lower, choices=['ed25519', 'p256'],
+        default='ed25519',
         help='DICE key curve: ed25519 (default) or p256.',
     )
     parser.add_argument(
