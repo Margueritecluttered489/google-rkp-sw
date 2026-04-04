@@ -34,7 +34,6 @@ import argparse
 import base64
 import configparser
 import os
-import struct
 import sys
 import textwrap
 import urllib.error
@@ -59,9 +58,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PrivateKey,
     X25519PublicKey,
 )
-from cryptography.hazmat.primitives.ciphers import algorithms as cipher_algorithms
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.cmac import CMAC
 from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
@@ -86,51 +83,6 @@ DICE_SUBJECT_PUB_KEY = -4670552   # Open DICE profile
 DICE_KEY_USAGE = -4670553         # Open DICE profile
 
 RKP_SERVER_URL = 'https://remoteprovisioning.googleapis.com/v1'
-
-
-# ---------------------------------------------------------------------------
-# Hardware KDF — AES-128-CMAC Counter Mode (NIST SP 800-108)
-# ---------------------------------------------------------------------------
-
-class HardwareKdf:
-    """AES-128-CMAC counter-mode KDF for hardware-bound key derivation.
-
-    Implements the KDF observed in TEE ``CryptoHmacKdf(mode=1)`` calls:
-
-    * 16-byte output blocks (AES-128 block size).
-    * Counter mode: ``block_i = AES-CMAC(key, BE32(i) || label)``.
-    * Blocks are independently computed (no feedback chaining).
-
-    On real hardware the AES key is derived via a SoC-internal key ladder
-    and never enters software-accessible memory.  This class accepts the
-    key directly for simulation / research purposes.
-
-    See Also:
-        NIST SP 800-108r1 Section 4.1 — KDF in Counter Mode.
-    """
-
-    def __init__(self, aes_key: bytes) -> None:
-        if len(aes_key) != 16:
-            raise ValueError(
-                f'AES key must be 16 bytes, got {len(aes_key)}'
-            )
-        self._key = aes_key
-
-    def _cmac_block(self, counter: int, label: bytes) -> bytes:
-        """Compute one 16-byte CMAC block."""
-        mac = CMAC(cipher_algorithms.AES(self._key))
-        mac.update(struct.pack('>I', counter) + label)
-        return mac.finalize()
-
-    def derive(self, label: bytes, length: int = 32) -> bytes:
-        """Derive *length* bytes of key material for *label*."""
-        if not label:
-            raise ValueError('Empty label not supported')
-        num_blocks = (length + 15) // 16
-        output = b''.join(
-            self._cmac_block(i, label) for i in range(1, num_blocks + 1)
-        )
-        return output[:length]
 
 
 # ---------------------------------------------------------------------------
@@ -207,39 +159,17 @@ def get_fingerprint(cfg_path: str | None) -> str:
 # Seed Resolution
 # ---------------------------------------------------------------------------
 
-def resolve_seed(
-    *,
-    seed_hex: str | None = None,
-    hw_key_hex: str | None = None,
-    kdf_label: str | None = None,
-) -> bytes:
-    """Resolve the 32-byte Ed25519 CDI_Leaf seed.
-
-    Priority:
-      1. ``--seed`` (direct 32-byte hex seed)
-      2. ``--hw-key`` + ``--kdf-label`` (simulate hardware KDF)
-      3. Fail with an error asking the user to provide one.
-    """
+def resolve_seed(*, seed_hex: str | None = None) -> bytes:
+    """Resolve the 32-byte CDI_Leaf seed from ``--seed`` hex string."""
     if seed_hex:
         seed = bytes.fromhex(seed_hex)
         if len(seed) != 32:
             raise ValueError(f'Seed must be 32 bytes, got {len(seed)}')
         return seed
 
-    if hw_key_hex:
-        if not kdf_label:
-            print(
-                'Error: --kdf-label is required when using --hw-key.',
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        key = bytes.fromhex(hw_key_hex)
-        return HardwareKdf(key).derive(kdf_label.encode(), 32)
-
     print(
         'Error: No key material provided.\n'
-        'Supply either --seed <64-hex-chars> or '
-        '--hw-key <32-hex-chars> --kdf-label <label>.',
+        'Supply --seed <64-hex-chars>.',
         file=sys.stderr,
     )
     sys.exit(1)
@@ -744,17 +674,12 @@ def parse_der_cert_chain(data: bytes) -> list[x509.Certificate]:
 
 def cmd_provision(args: argparse.Namespace) -> None:
     """Full provisioning: generate keys, fetch EEK, submit CSR, get certs."""
-    seed = resolve_seed(
-        seed_hex=args.seed, hw_key_hex=args.hw_key,
-        kdf_label=getattr(args, 'kdf_label', None),
-    )
+    seed = resolve_seed(seed_hex=args.seed)
     curve = args.curve
     keys = DeviceKeys(seed, curve=curve)
     device_info = load_device_config(args.config)
     fingerprint = get_fingerprint(args.config)
 
-    mode = 'hw-kdf' if args.hw_key else 'direct-seed'
-    print(f'Mode:            {mode}')
     print(f'CDI_Leaf pubkey: {keys.pub_raw.hex()}')
 
     num_keys = args.num_keys
@@ -826,10 +751,7 @@ def cmd_provision(args: argparse.Namespace) -> None:
 
 def cmd_keybox(args: argparse.Namespace) -> None:
     """Export attestation keys and certs as keybox.xml."""
-    seed = resolve_seed(
-        seed_hex=args.seed, hw_key_hex=args.hw_key,
-        kdf_label=getattr(args, 'kdf_label', None),
-    )
+    seed = resolve_seed(seed_hex=args.seed)
     curve = args.curve
     keys = DeviceKeys(seed, curve=curve)
     device_info = load_device_config(args.config)
@@ -883,10 +805,7 @@ def cmd_keybox(args: argparse.Namespace) -> None:
 
 def cmd_info(args: argparse.Namespace) -> None:
     """Show key and device information."""
-    seed = resolve_seed(
-        seed_hex=args.seed, hw_key_hex=args.hw_key,
-        kdf_label=getattr(args, 'kdf_label', None),
-    )
+    seed = resolve_seed(seed_hex=args.seed)
     curve = args.curve
     keys = DeviceKeys(seed, curve=curve)
     device_info = load_device_config(args.config)
@@ -904,13 +823,6 @@ def cmd_info(args: argparse.Namespace) -> None:
           f'system={device_info.get("system_patch_level")} '
           f'vendor={device_info.get("vendor_patch_level")}')
 
-    if args.hw_key:
-        label = getattr(args, 'kdf_label', None)
-        if label:
-            print(f'\nHardware KDF simulation:')
-            kdf = HardwareKdf(bytes.fromhex(args.hw_key))
-            out = kdf.derive(label.encode(), 32)
-            print(f'  KDF("{label}"): {out.hex()}')
 
 
 def cmd_verify(args: argparse.Namespace) -> None:
@@ -969,22 +881,13 @@ def cmd_verify(args: argparse.Namespace) -> None:
 
 def _add_key_args(parser: argparse.ArgumentParser) -> None:
     """Add common key-material arguments to a subparser."""
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
+    parser.add_argument(
         '--seed', type=str, metavar='HEX',
         help='32-byte CDI_Leaf seed (64 hex chars).',
-    )
-    group.add_argument(
-        '--hw-key', type=str, metavar='HEX',
-        help='16-byte hardware AES key (32 hex chars) for simulated KDF.',
     )
     parser.add_argument(
         '--curve', type=str, choices=['ed25519', 'p256'], default='ed25519',
         help='DICE key curve: ed25519 (default) or p256.',
-    )
-    parser.add_argument(
-        '--kdf-label', type=str, metavar='LABEL',
-        help='KDF label string (required with --hw-key).',
     )
     parser.add_argument(
         '--config', type=str, metavar='FILE',
@@ -1001,7 +904,7 @@ def main() -> None:
             examples:
               %(prog)s info --seed <hex> --config device_prop.conf
               %(prog)s provision --seed <hex> --config device_prop.conf
-              %(prog)s provision --hw-key <hex> --kdf-label rkp_bcc_km --config device_prop.conf
+              %(prog)s provision --seed <hex> --curve p256 --config device_prop.conf
               %(prog)s keybox --seed <hex> --config device_prop.conf -o keybox.xml
               %(prog)s verify csr_output.cbor
 
